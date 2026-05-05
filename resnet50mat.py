@@ -1,9 +1,10 @@
 import torch
 from torch import Tensor
 import torch.nn as nn
-
-
-# from torchvision._internally_replaced_utils import load_state_dict_from_url
+import os
+import urllib.request
+from PIL import Image
+import numpy as np
 
 
 def conv3x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, dilation: int = 1) -> nn.Conv2d:
@@ -199,8 +200,7 @@ class ResNet(nn.Module):
 
         return nn.Sequential(*layers)
 
-    def _forward_impl(self, x: Tensor) -> Tensor:
-        # See note [TorchScript super()]
+    def forward(self, x: Tensor) -> Tensor:
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
@@ -243,14 +243,8 @@ class ResBlock(nn.Module):
         return x
 
 
-def _resnet50(pretrained=True,
-              progress=True,
-              ):
-    model = ResNet(Bottleneck, [3, 4, 6, 3], )
-    # if pretrained:
-    # state_dict = torch.load('resnet50-0676ba61.pth')
-    # model.load_state_dict(state_dict)
-    return model
+def _resnet50():
+    return ResNet(Bottleneck, [3, 4, 6, 3])
 
 
 class RES50MAT(nn.Module):
@@ -320,12 +314,101 @@ class RES50MAT(nn.Module):
         alpha = torch.clamp(alpha, 0, 1)
         return alpha
 
-#
-# a=RES50MAT()
-# b=torch.randn(1,3,1024,1024)
-# c=torch.randn(1,3,1024,1024)
-# a.eval()
-# with torch.no_grad():
-#     aaa=a(b,c)
-#     print(aaa.shape)
-#
+    def predict(self, image, trimap):
+        assert isinstance(image, Image.Image), f"Expected PIL Image instead of {type(image)}"
+        assert isinstance(trimap, Image.Image), f"Expected PIL Image instead of {type(trimap)}"
+
+        rawimg = np.array(image.convert("RGB"))
+        trimap = np.array(trimap.convert("L"))
+
+        #image = image.permute(2, 0, 1).unsqueeze(0)
+        #trimap = trimap.unsqueeze(0).unsqueeze(0)
+
+        rawimg = rawimg[:, :, ::-1]
+
+        import cv2
+
+        trimap_nonp=trimap.copy()
+        h,w,c=rawimg.shape
+        nonph,nonpw,_=rawimg.shape
+        newh= (((h-1)//64)+2)*64
+        neww= (((w-1)//64)+2)*64
+        padh=newh-h
+        padh1=int(padh/2)
+        padh2=padh-padh1
+        padw=neww-w
+        padw1=int(padw/2)
+        padw2=padw-padw1
+        rawimg_pad=cv2.copyMakeBorder(rawimg,padh1,padh2,padw1,padw2,cv2.BORDER_REFLECT)
+        trimap_pad=cv2.copyMakeBorder(trimap,padh1,padh2,padw1,padw2,cv2.BORDER_REFLECT)
+        h_pad,w_pad,_=rawimg_pad.shape
+        tritemp = np.zeros([*trimap_pad.shape, 3], np.float32)
+        tritemp[:, :, 0] = (trimap_pad == 0)
+        tritemp[:, :, 1] = (trimap_pad == 128)
+        tritemp[:, :, 2] = (trimap_pad == 255)
+        tritemp2=np.transpose(tritemp,(2,0,1))
+        tritemp2=tritemp2[np.newaxis,:,:,:]
+        img=np.transpose(rawimg_pad,(2,0,1))[np.newaxis,::-1,:,:]
+        img=np.array(img,np.float32)
+        img=img/255.
+
+        with torch.no_grad():
+            # TODO device from weights
+            device = self.device
+
+            img=torch.from_numpy(img).to(device)
+            tritemp2=torch.from_numpy(tritemp2).to(device)
+
+            pred=self.forward(img,tritemp2)
+
+            pred=pred.detach().cpu().numpy()[0]
+            pred=pred[:,padh1:padh1+h,padw1:padw1+w]
+            preda=pred[0:1,]*255
+            preda=np.transpose(preda,(1,2,0))
+            preda=preda*(trimap_nonp[:,:,None]==128)+(trimap_nonp[:,:,None]==255)*255
+
+        preda=np.array(preda,np.uint8)[:, :, 0]
+
+        return Image.fromarray(preda)
+
+def load(path, device=None):
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    directory, filename = os.path.split(path)
+
+    if not os.path.exists(path):
+        assert filename in ["model.ckpt", "model_better.ckpt"], f"Filename must be model.ckpt or model_better.ckpt instead of {filename}"
+
+        url = f"https://huggingface.co/Coldswamp/ResNet50-Matting/resolve/main/{filename}"
+
+        print(f"Downloading {url}")
+
+        if directory:
+            os.path.makedirs(directory, exist_ok=True)
+
+        urllib.request.urlretrieve(url, path)
+
+    state_dict = torch.load(path, weights_only=True, map_location="cpu")
+
+    model = RES50MAT()
+    model.load_state_dict(state_dict["model"])
+    model.to(device)
+    model.eval()
+    model.device = device
+
+    return model
+
+def test_shape():
+    model = RES50MAT()
+    b = torch.randn(1, 3, 1024, 1024)
+    c = torch.randn(1, 3, 1024, 1024)
+
+    model.eval()
+
+    with torch.no_grad():
+        pred = model(b, c)
+        assert pred.shape == (1, 1, 1024, 1024)
+
+if __name__ == "__main__":
+    test_shape()

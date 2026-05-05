@@ -1,0 +1,6 @@
+__pycache__
+data
+Combined_Dataset
+PascalVOC2012
+*.ckpt
+*.pth
