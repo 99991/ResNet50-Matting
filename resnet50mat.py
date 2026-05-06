@@ -1,206 +1,96 @@
 import torch
-from torch import Tensor
 import torch.nn as nn
 import os
 import urllib.request
-from PIL import Image
 import numpy as np
-
-
-def conv3x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, dilation: int = 1) -> nn.Conv2d:
-    """3x3 convolution with padding"""
-    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
-                     padding=dilation, groups=groups, bias=False, dilation=dilation)
-
-
-def conv1x1(in_planes: int, out_planes: int, stride: int = 1) -> nn.Conv2d:
-    """1x1 convolution"""
-    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
-
-
-def conv1x1s(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, dilation: int = 1) -> nn.Conv2d:
-    """3x3 convolution with padding"""
-    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride,
-                     padding=0, groups=groups, bias=False, dilation=dilation)
-
-
-class BasicBlock(nn.Module):
-    expansion: int = 1
-
-    def __init__(
-            self,
-            inplanes: int,
-            planes: int,
-            stride: int = 1,
-            downsample=None,
-            groups: int = 1,
-            base_width: int = 64,
-            dilation: int = 1,
-            norm_layer=None
-    ) -> None:
-        super(BasicBlock, self).__init__()
-        if norm_layer is None:
-            norm_layer = nn.BatchNorm2d
-        if groups != 1 or base_width != 64:
-            raise ValueError('BasicBlock only supports groups=1 and base_width=64')
-        if dilation > 1:
-            raise NotImplementedError("Dilation > 1 not supported in BasicBlock")
-        # Both self.conv1 and self.downsample layers downsample the input when stride != 1
-        self.conv1 = conv3x3(inplanes, planes, stride)
-        self.bn1 = norm_layer(planes)
-        self.relu = nn.ReLU(inplace=True)
-        self.conv2 = conv3x3(planes, planes)
-        self.bn2 = norm_layer(planes)
-        self.downsample = downsample
-        self.stride = stride
-
-    def forward(self, x: Tensor) -> Tensor:
-        identity = x
-
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
-
-        out = self.conv2(out)
-        out = self.bn2(out)
-
-        if self.downsample is not None:
-            identity = self.downsample(x)
-
-        out += identity
-        out = self.relu(out)
-
-        return out
-
+from PIL import Image
 
 class Bottleneck(nn.Module):
-    # Bottleneck in torchvision places the stride for downsampling at 3x3 convolution(self.conv2)
-    # while original implementation places the stride at the first 1x1 convolution(self.conv1)
-    # according to "Deep residual learning for image recognition"https://arxiv.org/abs/1512.03385.
-    # This variant is also known as ResNet V1.5 and improves accuracy according to
-    # https://ngc.nvidia.com/catalog/model-scripts/nvidia:resnet_50_v1_5_for_pytorch.
-
-    expansion: int = 4
-
-    def __init__(
-            self,
-            inplanes: int,
-            planes: int,
-            stride: int = 1,
-            downsample=None,
-            groups: int = 1,
-            base_width: int = 64,
-            dilation: int = 1,
-            norm_layer=None
-    ) -> None:
-        super(Bottleneck, self).__init__()
-        if norm_layer is None:
-            norm_layer = nn.BatchNorm2d
-        width = int(planes * (base_width / 64.)) * groups
-        # Both self.conv2 and self.downsample layers downsample the input when stride != 1
-        self.conv1 = conv1x1(inplanes, width)
-        self.bn1 = norm_layer(width)
-        self.conv2 = conv3x3(width, width, stride, groups, dilation)
-        self.bn2 = norm_layer(width)
-        self.conv3 = conv1x1(width, planes * self.expansion)
-        self.bn3 = norm_layer(planes * self.expansion)
+    def __init__(self, inplanes, midplanes, outplanes, stride=1, downsample=None):
+        super().__init__()
+        self.conv1 = nn.Conv2d(inplanes, midplanes, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(midplanes)
+        self.conv2 = nn.Conv2d(midplanes, midplanes, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(midplanes)
+        self.conv3 = nn.Conv2d(midplanes, outplanes, kernel_size=1, bias=False)
+        self.bn3 = nn.BatchNorm2d(outplanes)
         self.relu = nn.ReLU(inplace=True)
-        self.downsample = downsample
-        self.stride = stride
+        self.downsample = downsample if downsample else nn.Identity()
 
-    def forward(self, x: Tensor) -> Tensor:
-        identity = x
+    def forward(self, x):
+        x_skip = self.downsample(x)
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = self.relu(x)
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x += x_skip
+        x = self.relu(x)
+        return x
 
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
+class ResBlock(nn.Module):
+    def __init__(self, inplanes, midplanes):
+        super().__init__()
+        self.conv1 = nn.Conv2d(inplanes, midplanes, kernel_size=1)
+        self.gn1 = nn.BatchNorm2d(midplanes)
+        self.conv2 = nn.Conv2d(midplanes, midplanes, kernel_size=3, padding=1)
+        self.gn2 = nn.BatchNorm2d(midplanes)
+        self.conv3 = nn.Conv2d(midplanes, inplanes, kernel_size=1)
+        self.relu = nn.LeakyReLU(0.1)
 
-        out = self.conv2(out)
-        out = self.bn2(out)
-        out = self.relu(out)
+    def forward(self, x):
+        x_skip = x
+        x = self.conv1(x)
+        x = self.gn1(x)
+        x = self.relu(x)
+        x = self.conv2(x)
+        x = self.gn2(x)
+        x = self.relu(x)
+        x = self.conv3(x)
+        x += x_skip
+        x = self.relu(x)
+        return x
 
-        out = self.conv3(out)
-        out = self.bn3(out)
+def make_layer(inplanes, midplanes, outplanes, blocks, stride):
+    downsample = None
+    if stride != 1 or inplanes != outplanes:
+        downsample = nn.Sequential(
+            nn.Conv2d(inplanes, outplanes, kernel_size=1, stride=stride, bias=False),
+            nn.BatchNorm2d(outplanes))
 
-        if self.downsample is not None:
-            identity = self.downsample(x)
+    layers = [Bottleneck(inplanes, midplanes, outplanes, stride, downsample)]
+    for _ in range(1, blocks):
+        layers.append(Bottleneck(outplanes, midplanes, outplanes, stride=1, downsample=None))
 
-        out += identity
-        out = self.relu(out)
+    return nn.Sequential(*layers)
 
-        return out
-
-
-class ResNet(nn.Module):
-
-    def __init__(
-            self,
-            block,
-            layers,
-            num_classes: int = 1000,
-            zero_init_residual: bool = False,
-            groups: int = 1,
-            width_per_group: int = 64,
-            replace_stride_with_dilation=None,
-            norm_layer=None
-    ) -> None:
-        super(ResNet, self).__init__()
-        if norm_layer is None:
-            norm_layer = nn.BatchNorm2d
-        self._norm_layer = norm_layer
-
-        self.inplanes = 64
-        self.dilation = 1
-        if replace_stride_with_dilation is None:
-            # each element in the tuple indicates if we should replace
-            # the 2x2 stride with a dilated convolution instead
-            replace_stride_with_dilation = [False, False, False]
-        if len(replace_stride_with_dilation) != 3:
-            raise ValueError("replace_stride_with_dilation should be None "
-                             "or a 3-element tuple, got {}".format(replace_stride_with_dilation))
-        self.groups = groups
-        self.base_width = width_per_group
-        self.conv1 = nn.Conv2d(3, self.inplanes, kernel_size=7, stride=2, padding=3,
-                               bias=False)
-        self.bn1 = norm_layer(self.inplanes)
+class ResNet50(nn.Module):
+    def __init__(self, num_classes=1000):
+        super().__init__()
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.layer1 = self._make_layer(block, 64, layers[0])
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=2,
-                                       dilate=replace_stride_with_dilation[0])
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=2,
-                                       dilate=replace_stride_with_dilation[1])
-        self.layer4 = self._make_layer(block, 512, layers[3], stride=2,
-                                       dilate=replace_stride_with_dilation[2])
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(512 * block.expansion, num_classes)
 
-    def _make_layer(self, block, planes: int, blocks: int,
-                    stride: int = 1, dilate: bool = False) -> nn.Sequential:
-        norm_layer = self._norm_layer
-        downsample = None
-        previous_dilation = self.dilation
-        if dilate:
-            self.dilation *= stride
-            stride = 1
-        if stride != 1 or self.inplanes != planes * block.expansion:
-            downsample = nn.Sequential(
-                conv1x1(self.inplanes, planes * block.expansion, stride),
-                norm_layer(planes * block.expansion),
-            )
+        self.layer1 = make_layer(64, 64, 256, 3, stride=1)
+        self.layer2 = make_layer(256, 128, 512, 4, stride=2)
+        self.layer3 = make_layer(512, 256, 1024, 6, stride=2)
+        self.layer4 = make_layer(1024, 512, 2048, 3, stride=2)
 
-        layers = []
-        layers.append(block(self.inplanes, planes, stride, downsample, self.groups,
-                            self.base_width, previous_dilation, norm_layer))
-        self.inplanes = planes * block.expansion
-        for _ in range(1, blocks):
-            layers.append(block(self.inplanes, planes, groups=self.groups,
-                                base_width=self.base_width, dilation=self.dilation,
-                                norm_layer=norm_layer))
+        self.avgpool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Linear(2048, num_classes)
 
-        return nn.Sequential(*layers)
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x):
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
@@ -217,45 +107,17 @@ class ResNet(nn.Module):
 
         return x
 
-
-class ResBlock(nn.Module):
-    def __init__(self, inc, midc, stride=1):
-        super(ResBlock, self).__init__()
-
-        self.conv1 = nn.Conv2d(inc, midc, kernel_size=1, stride=1, padding=0, bias=True)
-        self.gn1 = nn.BatchNorm2d(midc)
-        self.conv2 = nn.Conv2d(midc, midc, kernel_size=3, stride=1, padding=1, bias=True)
-        self.gn2 = nn.BatchNorm2d(midc)
-        self.conv3 = nn.Conv2d(midc, inc, kernel_size=1, stride=1, padding=0, bias=True)
-        self.relu = nn.LeakyReLU(0.1)
-
-    def forward(self, x):
-        x_ = x
-        x = self.conv1(x)
-        x = self.gn1(x)
-        x = self.relu(x)
-        x = self.conv2(x)
-        x = self.gn2(x)
-        x = self.relu(x)
-        x = self.conv3(x)
-        x = x + x_
-        x = self.relu(x)
-        return x
-
-
-def _resnet50():
-    return ResNet(Bottleneck, [3, 4, 6, 3])
-
-
 class RES50MAT(nn.Module):
     def __init__(self):
-        super(RES50MAT, self).__init__()
-        resnet = _resnet50()
+        super().__init__()
+        resnet = ResNet50()
 
-        self.start_conv0 = nn.Sequential(nn.Conv2d(6, 32, 3, 1, 1), nn.PReLU(32))
+        self.start_conv0 = nn.Sequential(
+            nn.Conv2d(6, 32, 3, 1, 1), nn.PReLU(32))
 
-        self.start_conv1 = nn.Sequential(nn.Conv2d(32, 32, 3, 2, 1), nn.PReLU(32), nn.Conv2d(32, 48, 3, 1, 1),
-                                         nn.PReLU(48))
+        self.start_conv1 = nn.Sequential(
+            nn.Conv2d(32, 32, 3, 2, 1), nn.PReLU(32),
+            nn.Conv2d(32, 48, 3, 1, 1), nn.PReLU(48))
 
         self.start_conv2 = nn.Conv2d(48, 64, 3, 2, 1)
 
@@ -265,26 +127,25 @@ class RES50MAT(nn.Module):
         self.l4 = resnet.layer4
 
         self.conv1 = nn.Sequential(
-            nn.Conv2d(in_channels=2048, out_channels=256, kernel_size=1, stride=1, padding=0, bias=True))
+            nn.Conv2d(in_channels=2048, out_channels=256, kernel_size=1))
         self.conv2 = nn.Sequential(
-            nn.Conv2d(in_channels=256 + 1024, out_channels=256, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.Conv2d(in_channels=256 + 1024, out_channels=256, kernel_size=1),
             ResBlock(256, 128), ResBlock(256, 128), ResBlock(256, 128))
         self.conv3 = nn.Sequential(
-            nn.Conv2d(in_channels=256 + 512, out_channels=256, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.Conv2d(in_channels=256 + 512, out_channels=256, kernel_size=1),
             ResBlock(256, 128), ResBlock(256, 128), ResBlock(256, 128))
         self.conv4 = nn.Sequential(
-            nn.Conv2d(in_channels=256 + 256, out_channels=128, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.Conv2d(in_channels=256 + 256, out_channels=128, kernel_size=1),
             ResBlock(128, 64), ResBlock(128, 64), ResBlock(128, 64))
         self.conv5 = nn.Sequential(
-            nn.Conv2d(in_channels=128 + 48, out_channels=64, kernel_size=3, stride=1, padding=1, bias=True),
-            nn.PReLU(64), nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1, padding=1, bias=True),
-            nn.PReLU(64), nn.Conv2d(in_channels=64, out_channels=48, kernel_size=3, stride=1, padding=1, bias=True),
-            nn.PReLU(48))
+            nn.Conv2d(in_channels=128 + 48, out_channels=64, kernel_size=3, padding=1), nn.PReLU(64),
+            nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, padding=1), nn.PReLU(64),
+            nn.Conv2d(in_channels=64, out_channels=48, kernel_size=3, padding=1), nn.PReLU(48))
         self.convo = nn.Sequential(
-            nn.Conv2d(in_channels=48 + 6 + 32, out_channels=32, kernel_size=3, stride=1, padding=1, bias=True),
-            nn.PReLU(32), nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, stride=1, padding=1, bias=True),
-            nn.PReLU(32), nn.Conv2d(in_channels=32, out_channels=1, kernel_size=3, stride=1, padding=1, bias=True))
-        self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
+            nn.Conv2d(in_channels=48 + 6 + 32, out_channels=32, kernel_size=3, padding=1), nn.PReLU(32),
+            nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, padding=1), nn.PReLU(32),
+            nn.Conv2d(in_channels=32, out_channels=1, kernel_size=3, padding=1))
+        self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
 
     def forward(self, x, y):
         inputs = torch.cat((x, y), 1)
@@ -311,65 +172,57 @@ class RES50MAT(nn.Module):
         X = self.up(X0)
         X = torch.cat((inputs, X, x0), 1)
         alpha = self.convo(X)
-        alpha = torch.clamp(alpha, 0, 1)
+        alpha = alpha.clip(0, 1)
         return alpha
 
     def predict(self, image, trimap):
         assert isinstance(image, Image.Image), f"Expected PIL Image instead of {type(image)}"
         assert isinstance(trimap, Image.Image), f"Expected PIL Image instead of {type(trimap)}"
 
-        rawimg = np.array(image.convert("RGB"))
+        image = np.array(image.convert("RGB"))
         trimap = np.array(trimap.convert("L"))
 
-        #image = image.permute(2, 0, 1).unsqueeze(0)
-        #trimap = trimap.unsqueeze(0).unsqueeze(0)
+        # Pad image and trimap size to multiples of 64
+        h, w, _ = image.shape
+        new_h = (((h - 1) // 64) + 2) * 64
+        new_w = (((w - 1) // 64) + 2) * 64
+        pad_h = new_h - h
+        pad_w = new_w - w
+        pad_h1 = pad_h // 2
+        pad_w1 = pad_w // 2
+        pad_h2 = pad_h - pad_h1
+        pad_w2 = pad_w - pad_w1
+        padding = [(pad_h1, pad_h2), (pad_w1, pad_w2), (0, 0)]
 
-        rawimg = rawimg[:, :, ::-1]
+        image = np.pad(image, padding, "symmetric")
+        trimap = np.pad(trimap, padding[:2], "symmetric")
 
-        import cv2
+        is_bg = trimap == 0
+        is_fg = trimap == 255
+        is_unknown = ~(is_bg | is_fg)
 
-        trimap_nonp=trimap.copy()
-        h,w,c=rawimg.shape
-        nonph,nonpw,_=rawimg.shape
-        newh= (((h-1)//64)+2)*64
-        neww= (((w-1)//64)+2)*64
-        padh=newh-h
-        padh1=int(padh/2)
-        padh2=padh-padh1
-        padw=neww-w
-        padw1=int(padw/2)
-        padw2=padw-padw1
-        rawimg_pad=cv2.copyMakeBorder(rawimg,padh1,padh2,padw1,padw2,cv2.BORDER_REFLECT)
-        trimap_pad=cv2.copyMakeBorder(trimap,padh1,padh2,padw1,padw2,cv2.BORDER_REFLECT)
-        h_pad,w_pad,_=rawimg_pad.shape
-        tritemp = np.zeros([*trimap_pad.shape, 3], np.float32)
-        tritemp[:, :, 0] = (trimap_pad == 0)
-        tritemp[:, :, 1] = (trimap_pad == 128)
-        tritemp[:, :, 2] = (trimap_pad == 255)
-        tritemp2=np.transpose(tritemp,(2,0,1))
-        tritemp2=tritemp2[np.newaxis,:,:,:]
-        img=np.transpose(rawimg_pad,(2,0,1))[np.newaxis,::-1,:,:]
-        img=np.array(img,np.float32)
-        img=img/255.
+        trimap = np.array([[is_bg, is_unknown, is_fg]], np.float32)
 
         with torch.no_grad():
-            # TODO device from weights
-            device = self.device
+            device = self.start_conv2.weight.device
 
-            img=torch.from_numpy(img).to(device)
-            tritemp2=torch.from_numpy(tritemp2).to(device)
+            image = image.transpose(2, 0, 1)
+            image = image.astype(np.float32) / 255.0
+            image = torch.from_numpy(image).to(device).unsqueeze(0)
+            trimap = torch.from_numpy(trimap).to(device)
 
-            pred=self.forward(img,tritemp2)
+            alpha = self.forward(image, trimap)
 
-            pred=pred.detach().cpu().numpy()[0]
-            pred=pred[:,padh1:padh1+h,padw1:padw1+w]
-            preda=pred[0:1,]*255
-            preda=np.transpose(preda,(1,2,0))
-            preda=preda*(trimap_nonp[:,:,None]==128)+(trimap_nonp[:,:,None]==255)*255
+            alpha = alpha.detach().cpu().numpy()[0, 0]
 
-        preda=np.array(preda,np.uint8)[:, :, 0]
+            # Set known foreground and background from trimap
+            alpha[is_fg] = 1
+            alpha[is_bg] = 0
+            
+            # Remove padding
+            alpha = alpha[pad_h1:pad_h1 + h, pad_w1:pad_w1 + w]
 
-        return Image.fromarray(preda)
+            return Image.fromarray((alpha * 255).astype(np.uint8))
 
 def load(path, device=None):
     if device is None:
@@ -389,13 +242,12 @@ def load(path, device=None):
 
         urllib.request.urlretrieve(url, path)
 
-    state_dict = torch.load(path, weights_only=True, map_location="cpu")
+    d = torch.load(path, weights_only=True, map_location="cpu")["model"]
 
     model = RES50MAT()
-    model.load_state_dict(state_dict["model"])
+    model.load_state_dict(d)
     model.to(device)
     model.eval()
-    model.device = device
 
     return model
 

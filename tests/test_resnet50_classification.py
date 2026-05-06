@@ -34,7 +34,7 @@ def my_preprocess(img, crop_size=224, small_edge_size=256):
 
 
 def test_resnet50_classification():
-    model = resnet50mat._resnet50()
+    model = resnet50mat.ResNet50()
     checkpoint_path = f"{parent_dir}/resnet50-0676ba61.pth"
 
     if not os.path.exists(checkpoint_path):
@@ -63,7 +63,8 @@ def test_resnet50_classification():
     class_id = prediction.argmax().item()
     score = prediction[class_id]
 
-    expected_class_id = 355 # llama
+    # class_id 355 corresponds to "llama"
+    expected_class_id = 355
     expected_score = 0.9899351
 
     assert class_id == expected_class_id, f"Expected {expected_class_id=}, got {class_id=}"
@@ -100,4 +101,4 @@ if __name__ == "__main__":
     test_resnet50_classification()
     # uncomment to obtain expected_class_id
     # currently not in use to reduce dependencies
-    #test_torchvision_model()
+    # test_torchvision_model()

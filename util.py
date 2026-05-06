@@ -31,7 +31,7 @@ def download_test_images(directory="data"):
     if os.path.exists(os.path.join(directory, "GT04.png")):
         return
 
-    print(f"Downloading test images...")
+    print("Downloading test images...")
     urllib.request.urlretrieve(url, filename)
 
     with open(filename, "rb") as f:
