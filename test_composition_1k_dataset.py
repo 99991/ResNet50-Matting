@@ -8,7 +8,7 @@ import resnet50mat
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint", default="model.ckpt")
+    parser.add_argument("--checkpoint", default="model_better.ckpt")
     parser.add_argument("--adobe_dir", default="Combined_Dataset")
     parser.add_argument("--pascal_dir", default="PascalVOC2012")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
