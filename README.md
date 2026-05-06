@@ -50,6 +50,7 @@ To reproduce the test results, run [`test_composition_1k_dataset.py`](/test_comp
 1. Ask [Brain Price](https://arxiv.org/pdf/1703.03872) to send you `Adobe_Deep_Matting_Dataset.zip`, place it in this directory and unzip it. The name of the resulting directory will be `Combined_Dataset`.
 2. Download and extract the [Pascal VOC2012 dataset](http://host.robots.ox.ac.uk/pascal/VOC/voc2012/index.html#devkit) dataset.
 4. Run `python test_composition_1k_dataset.py --adobe_dir Combined_Dataset/ --pascal_dir VOCdevkit/VOC2012/JPEGImages/`
+    * This takes about 11 minutes and 8147MiB of VRAM on an RTX 3060 (12GB) GPU.
 
 ## Pretrained Model
 
